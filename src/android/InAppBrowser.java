@@ -92,7 +92,6 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.HashMap;
-import java.util.Objects;
 import java.util.StringTokenizer;
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -165,6 +164,10 @@ public class InAppBrowser extends CordovaPlugin {
     private static final int REQ_CAMERA_SEC = 1;
     private String applicationId;
     private File cameraCaptureFile;
+
+    private WebView fileChooserWebViewRef;
+    private ValueCallback<Uri[]> filePathCallback;
+    private WebChromeClient.FileChooserParams fileChooserParams;
 
     /**
      * Executes the request and returns PluginResult.
@@ -943,59 +946,17 @@ public class InAppBrowser extends CordovaPlugin {
                     {
                         LOG.d(LOG_TAG, "File Chooser 5.0+");
                         // If callback exists, finish it.
-                        if(mUploadCallback != null) {
-                            mUploadCallback.onReceiveValue(null);
+
+                        InAppBrowser.this.fileChooserWebViewRef = webView;
+                        InAppBrowser.this.filePathCallback = filePathCallback;
+                        InAppBrowser.this.fileChooserParams = fileChooserParams;
+
+                        if (fileChooserParams.isCaptureEnabled() &&
+                          !PermissionHelper.hasPermission(InAppBrowser.this, Manifest.permission.CAMERA)) {
+                            PermissionHelper.requestPermission(InAppBrowser.this, REQ_CAMERA_SEC, Manifest.permission.CAMERA);
+                        } else {
+                            InAppBrowser.this.captureOrPickFiles();
                         }
-                        mUploadCallback = filePathCallback;
-
-                        Boolean selectMultiple = false;
-                        if (fileChooserParams.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
-                            selectMultiple = true;
-                        }
-
-                        String[] acceptTypes = fileChooserParams.getAcceptTypes();
-                        Intent intent = fileChooserParams.createIntent();
-                        intent.addCategory(Intent.CATEGORY_OPENABLE);
-                        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, selectMultiple);
-
-                        if (acceptTypes.length > 1) {
-                            intent.setType("*/*"); // Accept all, filter mime types by Intent.EXTRA_MIME_TYPES.
-                            intent.putExtra(Intent.EXTRA_MIME_TYPES, acceptTypes);
-                        }
-
-                        ArrayList<Intent> intentList = new ArrayList();
-
-                        if (fileChooserParams.isCaptureEnabled()) {
-                            if (!PermissionHelper.hasPermission(InAppBrowser.this, Manifest.permission.CAMERA)) {
-                                PermissionHelper.requestPermission(InAppBrowser.this, REQ_CAMERA_SEC, Manifest.permission.CAMERA);
-                                mUploadCallback.onReceiveValue(null);
-                                mUploadCallback = null;
-                                return true;
-                            }
-
-                            cameraCaptureFile = createTempImageFile();
-                            if (cameraCaptureFile != null) {
-                                Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-
-                                Uri intentOutputUri = FileProvider.getUriForFile(cordova.getActivity(), applicationId + ".fileprovider", cameraCaptureFile);
-                                cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, intentOutputUri);
-                                cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                                intentList.add(cameraIntent);
-                            }
-                        }
-
-                        Intent galleryIntent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
-                        galleryIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, selectMultiple);
-
-                        intentList.add(galleryIntent);
-                        intentList.add(intent);
-
-                        Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
-                        chooserIntent.putExtra(Intent.EXTRA_INTENT, intent);
-                        chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentList.toArray(new Parcelable[] {}));
-
-                        // Run cordova startActivityForResult
-                        cordova.startActivityForResult(InAppBrowser.this, chooserIntent, FILECHOOSER_REQUESTCODE);
 
                         return true;
                     }
@@ -1110,6 +1071,55 @@ public class InAppBrowser extends CordovaPlugin {
         return "";
     }
 
+    private void captureOrPickFiles() {
+        if(mUploadCallback != null) {
+            mUploadCallback.onReceiveValue(null);
+        }
+        mUploadCallback = filePathCallback;
+
+        Boolean selectMultiple = false;
+        if (fileChooserParams.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            selectMultiple = true;
+        }
+
+        String[] acceptTypes = fileChooserParams.getAcceptTypes();
+        Intent intent = fileChooserParams.createIntent();
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, selectMultiple);
+
+        if (acceptTypes.length > 1) {
+            intent.setType("*/*"); // Accept all, filter mime types by Intent.EXTRA_MIME_TYPES.
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, acceptTypes);
+        }
+
+        ArrayList<Intent> intentList = new ArrayList();
+
+        if (fileChooserParams.isCaptureEnabled()) {
+            cameraCaptureFile = createTempImageFile();
+            if (cameraCaptureFile != null) {
+                Intent cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+
+                Uri intentOutputUri = FileProvider.getUriForFile(cordova.getActivity(), applicationId + ".fileprovider", cameraCaptureFile);
+                cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, intentOutputUri);
+                cameraIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                intentList.add(cameraIntent);
+            }
+        }
+
+        Intent galleryIntent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        galleryIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, selectMultiple);
+
+        intentList.add(galleryIntent);
+        intentList.add(intent);
+
+        Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
+        chooserIntent.putExtra(Intent.EXTRA_INTENT, intent);
+        chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, intentList.toArray(new Parcelable[] {}));
+
+        // Run cordova startActivityForResult
+        cordova.startActivityForResult(InAppBrowser.this, chooserIntent, FILECHOOSER_REQUESTCODE);
+    }
+
     /**
      * Create a new plugin success result and send it back to JavaScript
      *
@@ -1191,8 +1201,24 @@ public class InAppBrowser extends CordovaPlugin {
         mUploadCallback = null;
     }
 
-    /**
-     * The webview client receives notifications about appView
+    @Override
+    public void onRequestPermissionResult(int requestCode, String[] permissions,
+                                          int[] grantResults) throws JSONException {
+        this.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) throws JSONException {
+        if (requestCode == REQ_CAMERA_SEC) {
+            this.captureOrPickFiles();
+        } else {
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        }
+    }
+
+  /**
+       * The webview client receives notifications about appView
      */
     public class InAppBrowserClient extends WebViewClient {
         EditText edittext;
